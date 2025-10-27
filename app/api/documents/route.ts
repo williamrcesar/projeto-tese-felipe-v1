@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
       throw error;
     }
 
-    const docs = (documents || []).map((doc) => ({
+    const docs = (documents || []).map((doc: any) => ({
       id: doc.id,
       title: doc.title,
       pages: doc.pages,

@@ -27,14 +27,14 @@ export async function GET(
     }
 
     return NextResponse.json({
-      id: doc.id,
-      title: doc.title,
-      pages: doc.pages,
-      chunksCount: doc.chunks_count,
-      projectId: doc.project_id,
-      filePath: doc.file_path,
-      createdAt: doc.created_at,
-      updatedAt: doc.updated_at,
+      id: (doc as any).id,
+      title: (doc as any).title,
+      pages: (doc as any).pages,
+      chunksCount: (doc as any).chunks_count,
+      projectId: (doc as any).project_id,
+      filePath: (doc as any).file_path,
+      createdAt: (doc as any).created_at,
+      updatedAt: (doc as any).updated_at,
     });
   } catch (error: any) {
     console.error('Document get error:', error);
