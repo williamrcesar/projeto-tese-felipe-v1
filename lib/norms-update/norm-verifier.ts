@@ -125,10 +125,10 @@ Determine:
    - Quando foi alterada/substituída?
    - Breve descrição da mudança
 
-3. TIPO DE ATUALIZAÇÃO necessária:
-   - "auto": Pode atualizar automaticamente (leis/decretos públicos)
-   - "manual": Requer verificação manual (normas ABNT/ISO pagas)
-   - "none": Não precisa atualização (está vigente)
+3. TIPO DE ATUALIZAÇÃO necessária (OBRIGATÓRIO - escolha um):
+   - "auto": Pode atualizar automaticamente (leis/decretos públicos revogadas ou substituídas)
+   - "manual": Requer verificação manual (normas ABNT/ISO pagas OU não há info suficiente)
+   - "none": Não precisa atualização (norma está vigente sem alterações)
 
 4. Se possível ATUALIZAR AUTOMATICAMENTE:
    - Sugira o texto atualizado para substituir no documento
@@ -246,12 +246,27 @@ JSON:
     };
   }
 
+  // Valida e corrige updateType
+  let updateType: UpdateType = parsed.updateType as UpdateType;
+
+  // Se retornou "desconhecido" ou valor inválido, mapeia para "manual"
+  if (!updateType || !['auto', 'manual', 'none'].includes(updateType)) {
+    console.warn(`[NORMS] Invalid updateType "${updateType}" for ${reference.number}, defaulting to "manual"`);
+    updateType = 'manual';
+  }
+
+  // Se status é desconhecido, updateType deve ser manual
+  if (parsed.status === 'desconhecido' && updateType !== 'manual') {
+    console.warn(`[NORMS] Status is "desconhecido" but updateType is "${updateType}", correcting to "manual"`);
+    updateType = 'manual';
+  }
+
   const result = {
     status: parsed.status as NormStatus || 'desconhecido',
     updatedNumber: parsed.updatedNumber,
     updatedDate: parsed.updatedDate,
     updateDescription: parsed.updateDescription,
-    updateType: parsed.updateType as UpdateType || 'manual',
+    updateType,
     sourceUrl: parsed.sourceUrl,
     isPaid: parsed.isPaid || isPaid,
     suggestedText: parsed.suggestedText,
