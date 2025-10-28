@@ -55,7 +55,7 @@ Para cada melhoria sugerida, retorne JSON no formato:
   "suggestions": [
     {
       "paragraphIndex": 0,
-      "originalText": "texto original exato (pode ser frase ou trecho)",
+      "originalText": "texto original exato da frase ou trecho (mínimo 30 caracteres)",
       "improvedText": "texto melhorado",
       "reason": "explicação clara do motivo (1-2 frases)",
       "type": "grammar|style|clarity|coherence|conciseness",
@@ -66,9 +66,11 @@ Para cada melhoria sugerida, retorne JSON no formato:
 
 IMPORTANTE:
 - "paragraphIndex" deve ser 0 para o primeiro parágrafo da seção, 1 para o segundo, etc
-- "originalText" deve ser EXATO (incluindo pontuação)
+- "originalText" deve ser um trecho COMPLETO e EXATO do texto (mínimo 30 caracteres, incluindo pontuação)
+- NÃO truncar ou resumir o "originalText" - deve ser copiado EXATAMENTE como está
 - Se não houver melhorias necessárias, retorne: {"suggestions": []}
 - Confidence: 1.0 = certeza absoluta, 0.7 = sugestão moderada
+- Foque em 3-5 sugestões mais importantes (não precisa sugerir tudo)
 
 Retorne APENAS o JSON, sem texto adicional.`;
 
@@ -131,8 +133,27 @@ Retorne APENAS o JSON, sem texto adicional.`;
         continue;
       }
 
-      if (!paragraphs[localIndex].includes(sug.originalText.trim())) {
-        console.warn('[IMPROVE] Original text not found in paragraph:', sug.originalText.substring(0, 50));
+      const originalTextTrimmed = sug.originalText.trim();
+      const paragraph = paragraphs[localIndex];
+
+      // Tenta match exato primeiro
+      let found = paragraph.includes(originalTextTrimmed);
+
+      // Se não encontrou exato, tenta match parcial (útil se IA truncou)
+      if (!found && originalTextTrimmed.length > 20) {
+        // Pega primeiras 20 chars do texto sugerido
+        const prefix = originalTextTrimmed.substring(0, 20);
+        found = paragraph.includes(prefix);
+
+        if (found) {
+          console.log(`[IMPROVE] Partial match found with prefix: "${prefix}"`);
+        }
+      }
+
+      if (!found) {
+        console.warn(`[IMPROVE] Text not found in paragraph ${localIndex}:`);
+        console.warn(`  Expected: "${originalTextTrimmed.substring(0, 80)}"`);
+        console.warn(`  Paragraph: "${paragraph.substring(0, 80)}"`);
         continue;
       }
 

@@ -172,6 +172,8 @@ async function executeImprovement(
 
     // Analisa cada seção
     const allSuggestions: any[] = [];
+    const BATCH_SIZE = 20; // Máximo de parágrafos por batch
+
     for (let i = 0; i < structure.sections.length; i++) {
       const section = structure.sections[i];
       const sectionParagraphs = paragraphs
@@ -181,17 +183,42 @@ async function executeImprovement(
 
       console.log(`[IMPROVE] Analyzing section ${i + 1}/${structure.sections.length}: "${section.title.substring(0, 50)}" (${sectionParagraphs.length} paragraphs)`);
 
-      const suggestions = await analyzeSectionForImprovements(
-        sectionParagraphs,
-        globalContext,
-        section.title,
-        section.startParagraphIndex,
-        provider,
-        model,
-        apiKey
-      );
+      // Se seção é grande, divide em batches menores
+      if (sectionParagraphs.length > BATCH_SIZE) {
+        console.log(`[IMPROVE] Section is large, splitting into batches of ${BATCH_SIZE} paragraphs`);
 
-      allSuggestions.push(...suggestions);
+        for (let batchStart = 0; batchStart < sectionParagraphs.length; batchStart += BATCH_SIZE) {
+          const batchEnd = Math.min(batchStart + BATCH_SIZE, sectionParagraphs.length);
+          const batch = sectionParagraphs.slice(batchStart, batchEnd);
+
+          console.log(`[IMPROVE] Analyzing batch ${batchStart}-${batchEnd} (${batch.length} paragraphs)`);
+
+          const suggestions = await analyzeSectionForImprovements(
+            batch,
+            globalContext,
+            section.title,
+            section.startParagraphIndex + batchStart,
+            provider,
+            model,
+            apiKey
+          );
+
+          allSuggestions.push(...suggestions);
+        }
+      } else {
+        // Seção pequena, processa de uma vez
+        const suggestions = await analyzeSectionForImprovements(
+          sectionParagraphs,
+          globalContext,
+          section.title,
+          section.startParagraphIndex,
+          provider,
+          model,
+          apiKey
+        );
+
+        allSuggestions.push(...suggestions);
+      }
 
       // Atualiza progresso
       const percentage = Math.round(((i + 1) / structure.sections.length) * 100);
