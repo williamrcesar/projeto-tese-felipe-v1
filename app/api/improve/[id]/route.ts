@@ -175,17 +175,17 @@ async function executeImprovement(
     for (let i = 0; i < structure.sections.length; i++) {
       const section = structure.sections[i];
       const sectionParagraphs = paragraphs
-        .slice(section.startIndex, section.endIndex)
+        .slice(section.startParagraphIndex, section.endParagraphIndex + 1)
         .filter(p => !p.isHeader)
         .map(p => p.text);
 
-      console.log(`[IMPROVE] Analyzing section ${i + 1}/${structure.sections.length}...`);
+      console.log(`[IMPROVE] Analyzing section ${i + 1}/${structure.sections.length}: "${section.title.substring(0, 50)}" (${sectionParagraphs.length} paragraphs)`);
 
       const suggestions = await analyzeSectionForImprovements(
         sectionParagraphs,
         globalContext,
         section.title,
-        section.startIndex,
+        section.startParagraphIndex,
         provider,
         model,
         apiKey

@@ -128,6 +128,9 @@ export async function extractDocumentStructure(filePath: string): Promise<{
     }
   });
 
+  console.log(`[IMPROVE] Extracted ${paragraphs.length} paragraphs`);
+  console.log(`[IMPROVE] Found ${sections.length} sections with styles`);
+
   // Finaliza última seção
   if (sections.length > 0) {
     sections[sections.length - 1].endParagraphIndex = paragraphs.length - 1;
@@ -136,11 +139,31 @@ export async function extractDocumentStructure(filePath: string): Promise<{
       sections[sections.length - 1].startParagraphIndex + 1;
   }
 
+  // FALLBACK: Se não encontrou nenhuma seção, cria uma seção única com todo o documento
+  if (sections.length === 0 && paragraphs.length > 0) {
+    console.log('[IMPROVE] No sections found with styles, creating single section for entire document');
+
+    // Usa o primeiro parágrafo como título, ou um título genérico
+    const title = paragraphs[0]?.text.substring(0, 100) || 'Documento';
+
+    sections.push({
+      title,
+      level: 1,
+      startParagraphIndex: 0,
+      endParagraphIndex: paragraphs.length - 1,
+      paragraphCount: paragraphs.length
+    });
+
+    console.log(`[IMPROVE] Created fallback section with ${paragraphs.length} paragraphs`);
+  }
+
   const structure: DocumentStructure = {
     sections,
     totalParagraphs: paragraphs.length,
     totalChapters: sections.filter(s => s.level === 1).length
   };
+
+  console.log(`[IMPROVE] Final structure: ${structure.sections.length} sections, ${structure.totalParagraphs} paragraphs`);
 
   return { structure, paragraphs };
 }
