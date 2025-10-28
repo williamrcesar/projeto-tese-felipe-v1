@@ -12,7 +12,7 @@ import { NormReference } from '@/lib/norms-update/types';
 // POST /api/norms-update - Inicia análise de normas
 export async function POST(req: NextRequest) {
   try {
-    const { documentId, provider = 'gemini', model = 'gemini-flash-latest' } = await req.json();
+    const { documentId, provider = 'gemini', model = 'gemini-1.5-flash' } = await req.json();
 
     if (!documentId) {
       return NextResponse.json(

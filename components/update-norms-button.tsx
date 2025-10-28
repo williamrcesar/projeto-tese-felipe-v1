@@ -26,7 +26,7 @@ export function UpdateNormsButton({ documentId, documentTitle }: UpdateNormsButt
         body: JSON.stringify({
           documentId,
           provider: 'gemini',
-          model: 'gemini-flash-latest'
+          model: 'gemini-1.5-flash'  // Modelo compatível com Google Search grounding
         })
       });
 

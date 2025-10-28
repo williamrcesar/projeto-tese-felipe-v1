@@ -170,29 +170,25 @@ Retorne APENAS JSON válido no formato:
     response = completion.choices[0]?.message?.content?.trim() || '{}';
   } else {
     // Gemini com Google Search (grounding)
-    console.log(`[NORMS] Initializing Gemini with model: ${model}`);
+    // Força uso de modelo compatível com grounding
+    const groundingModel = model === 'gemini-flash-latest' ? 'gemini-1.5-flash' : model;
+    console.log(`[NORMS] Initializing Gemini with model: ${groundingModel} (original: ${model})`);
 
     try {
       const { GoogleGenerativeAI } = await import('@google/generative-ai');
       const genAI = new GoogleGenerativeAI(apiKey);
       const geminiModel = genAI.getGenerativeModel({
-        model,
+        model: groundingModel,
         generationConfig: {
           temperature: 0.2,
           maxOutputTokens: 1000,
-          responseMimeType: 'application/json'
         },
         tools: [{
-          googleSearchRetrieval: {
-            dynamicRetrievalConfig: {
-              mode: 'MODE_DYNAMIC',
-              dynamicThreshold: 0.3
-            }
-          }
+          google_search: {}  // Sintaxe correta conforme documentação
         }]
       });
 
-      console.log(`[NORMS] Calling Gemini API for ${reference.number}...`);
+      console.log(`[NORMS] Calling Gemini API with Google Search for ${reference.number}...`);
       const result = await geminiModel.generateContent(prompt);
 
       console.log(`[NORMS] Gemini API response received for ${reference.number}`);
