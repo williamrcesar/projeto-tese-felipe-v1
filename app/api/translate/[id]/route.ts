@@ -36,12 +36,14 @@ export async function POST(
       targetLanguage,
       sourceLanguage,
       provider,
-      model
+      model,
+      maxPages
     }: {
       targetLanguage: SupportedLanguage;
       sourceLanguage?: SupportedLanguage;
       provider: AIProvider;
       model: string;
+      maxPages?: number;
     } = body;
 
     if (!targetLanguage || !provider || !model) {
@@ -74,7 +76,7 @@ export async function POST(
     }
 
     // Executa tradução em background
-    executeTranslation(jobId, documentId, doc, targetLanguage, sourceLanguage, provider, model);
+    executeTranslation(jobId, documentId, doc, targetLanguage, sourceLanguage, provider, model, maxPages);
 
     return NextResponse.json({
       jobId,
@@ -99,7 +101,8 @@ async function executeTranslation(
   targetLanguage: SupportedLanguage,
   sourceLanguage: SupportedLanguage | undefined,
   provider: AIProvider,
-  model: string
+  model: string,
+  maxPages?: number
 ) {
   const tempDir = os.tmpdir();
   const tempInputPath = path.join(tempDir, `${documentId}_input.docx`);
@@ -126,6 +129,7 @@ async function executeTranslation(
       sourceLanguage,
       provider,
       model,
+      maxPages, // Limit pages if specified
       onProgress: async (progress) => {
         await supabase.from('translation_jobs').update({
           status: progress.status,

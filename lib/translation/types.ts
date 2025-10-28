@@ -48,6 +48,7 @@ export type TranslationOptions = {
   provider: AIProvider;
   model: string;
   chunkSize?: number; // Tamanho do chunk de texto (default: 2000)
+  maxPages?: number; // Limita tradução às primeiras N páginas (útil para testes)
   glossary?: Array<{ term: string; caseSensitive: boolean; wholeWord: boolean }>; // Termos que não devem ser traduzidos
   onProgress?: (progress: TranslationProgress) => void;
   onLog?: (message: string) => void; // Callback para logs em tempo real
@@ -60,6 +61,8 @@ export type TextElement = {
   originalText: string;
   translatedText?: string;
   context?: string; // Contexto ao redor (parágrafo anterior/posterior)
+  textNodes?: Array<{ path: string; originalText: string }>; // Nós de texto individuais (quando juntados de múltiplos <w:t>)
+  isTextBox?: boolean; // Se vem de text box/shape (não deve ser agrupado com outros)
 };
 
 export type TranslationResult = {

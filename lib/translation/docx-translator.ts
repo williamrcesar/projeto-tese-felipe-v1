@@ -18,7 +18,7 @@ export async function extractTextsFromDocx(filePath: string): Promise<{
   const textElements: TextElement[] = [];
   let elementId = 0;
 
-  // Arquivos XML que contêm texto
+  // Arquivos XML que contêm texto (incluindo text boxes)
   const xmlPaths = [
     'word/document.xml',
     'word/header1.xml',
@@ -28,8 +28,34 @@ export async function extractTextsFromDocx(filePath: string): Promise<{
     'word/footer2.xml',
     'word/footer3.xml',
     'word/endnotes.xml',
-    'word/footnotes.xml'
+    'word/footnotes.xml',
+    // Text boxes podem estar em arquivos de shapes
+    'word/comments.xml',
+    'word/textbox.xml'
   ];
+
+  // Também procura por arquivos header/footer/drawing adicionais dinamicamente
+  const allFiles = Object.keys(zip.files);
+  const additionalXmlPaths = allFiles.filter(
+    (file) =>
+      file.startsWith('word/') &&
+      file.endsWith('.xml') &&
+      !xmlPaths.includes(file) &&
+      (file.includes('header') ||
+       file.includes('footer') ||
+       file.includes('textbox') ||
+       file.includes('shape') ||
+       file.includes('drawing') ||
+       file.includes('chart') ||
+       file.includes('diagram'))
+  );
+
+  xmlPaths.push(...additionalXmlPaths);
+
+  console.log(`[EXTRACT] Scanning ${xmlPaths.length} XML files for text elements...`);
+  if (additionalXmlPaths.length > 0) {
+    console.log(`[EXTRACT] Found ${additionalXmlPaths.length} additional XML files:`, additionalXmlPaths);
+  }
 
   for (const xmlPath of xmlPaths) {
     const file = zip.file(xmlPath);
@@ -41,61 +67,168 @@ export async function extractTextsFromDocx(filePath: string): Promise<{
     // Extrai todos os textos dentro de tags <w:t>
     const texts = extractTextsRecursive(parsed, xmlPath, []);
 
-    texts.forEach(({ text, tagPath, context }) => {
+    let addedFromThisFile = 0;
+    texts.forEach(({ text, tagPath, textNodes }) => {
       if (text.trim().length > 0) {
+        // Detecta se vem de text box (shapes, diagramas, etc)
+        const isTextBox = tagPath.includes('v:textbox') ||
+                          tagPath.includes('w:txbxContent') ||
+                          tagPath.includes('v:shape') ||
+                          tagPath.includes('v:roundrect') ||
+                          tagPath.includes('v:rect') ||
+                          tagPath.includes('w:pict');
+
         textElements.push({
           id: `elem_${elementId++}`,
           xmlPath,
           tagPath,
           originalText: text,
-          context
+          textNodes,  // Inclui nós de texto individuais se existirem
+          isTextBox   // Marca se é text box
         });
+        addedFromThisFile++;
+
+        if (isTextBox) {
+          console.log(`[EXTRACT] 📦 Text box detected (ID: ${elementId - 1}):\n  Path: ${tagPath}\n  Text: "${text.substring(0, 80)}${text.length > 80 ? '...' : ''}"\n  Has ${textNodes?.length || 0} fragments`);
+        }
       }
     });
+
+    if (addedFromThisFile > 0) {
+      console.log(`[EXTRACT] ${xmlPath}: ${addedFromThisFile} text elements`);
+    }
   }
 
   return { zip, textElements };
 }
 
 /**
+ * Extrai textos de um parágrafo, juntando todos os <w:t> em um único texto
+ */
+function extractParagraphTexts(
+  paragraph: any,
+  paragraphPath: string
+): Array<{ text: string; tagPath: string; textNodes: Array<{ path: string; originalText: string }> }> {
+  const textNodes: Array<{ path: string; originalText: string }> = [];
+
+  // Extrai todos os <w:t> do parágrafo recursivamente
+  function findTextNodes(obj: any, currentPath: string[]) {
+    if (!obj || typeof obj !== 'object') return;
+
+    const textTags = ['w:t', 'a:t'];
+    for (const tag of textTags) {
+      if (obj[tag]) {
+        const textArray = Array.isArray(obj[tag]) ? obj[tag] : [obj[tag]];
+        textArray.forEach((tNode: any, idx: number) => {
+          const text = typeof tNode === 'string' ? tNode : (tNode._ || '');
+          if (text) {
+            textNodes.push({
+              path: [...currentPath, `${tag}[${idx}]`].join('/'),
+              originalText: text
+            });
+          }
+        });
+      }
+    }
+
+    // Recursão
+    for (const key in obj) {
+      if (key === 'w:t' || key === 'a:t') continue; // Já processado acima
+      if (Array.isArray(obj[key])) {
+        obj[key].forEach((item: any, index: number) => {
+          findTextNodes(item, [...currentPath, `${key}[${index}]`]);
+        });
+      } else if (typeof obj[key] === 'object') {
+        findTextNodes(obj[key], [...currentPath, key]);
+      }
+    }
+  }
+
+  findTextNodes(paragraph, [paragraphPath]);
+
+  // Se não tem textos, retorna vazio
+  if (textNodes.length === 0) return [];
+
+  // Junta todos os textos em um único string
+  const fullText = textNodes.map(n => n.originalText).join('');
+
+  // Retorna apenas se tiver conteúdo útil
+  if (!fullText.trim()) return [];
+
+  return [{
+    text: fullText,
+    tagPath: paragraphPath,
+    textNodes: textNodes
+  }];
+}
+
+/**
  * Recursivamente extrai textos de estrutura XML
+ * IMPORTANTE: Text boxes são extraídos separadamente, não como parte do parágrafo pai
  */
 function extractTextsRecursive(
   obj: any,
   xmlPath: string,
   currentPath: string[],
   context: string[] = []
-): Array<{ text: string; tagPath: string; context?: string }> {
-  const results: Array<{ text: string; tagPath: string; context?: string }> = [];
+): Array<{ text: string; tagPath: string; textNodes?: Array<{ path: string; originalText: string }> }> {
+  const results: Array<{ text: string; tagPath: string; textNodes?: Array<{ path: string; originalText: string }> }> = [];
 
   if (!obj || typeof obj !== 'object') {
     return results;
   }
 
-  // Procura por tags <w:t> que contêm texto
-  if (obj['w:t']) {
-    const textArray = Array.isArray(obj['w:t']) ? obj['w:t'] : [obj['w:t']];
-    textArray.forEach((tNode: any) => {
-      if (typeof tNode === 'string') {
-        results.push({
-          text: tNode,
-          tagPath: currentPath.join('/'),
-          context: context.slice(-2).join(' ') // Contexto: 2 textos anteriores
+  // 🎯 PRIORITY 1: Extrai text boxes PRIMEIRO (v:textbox ou w:txbxContent)
+  // Cada text box é um elemento SEPARADO, não deve ser juntado com outros
+  if (obj['w:txbxContent']) {
+    const textboxContents = Array.isArray(obj['w:txbxContent']) ? obj['w:txbxContent'] : [obj['w:txbxContent']];
+    textboxContents.forEach((txbx, idx) => {
+      const txbxPath = [...currentPath, `w:txbxContent[${idx}]`].join('/');
+      console.log('[EXTRACT] Found w:txbxContent at path:', txbxPath);
+
+      // Extrai parágrafos DENTRO do text box
+      if (txbx['w:p']) {
+        const paragraphs = Array.isArray(txbx['w:p']) ? txbx['w:p'] : [txbx['w:p']];
+        paragraphs.forEach((para, pIdx) => {
+          const paraPath = `${txbxPath}/w:p[${pIdx}]`;
+          const extracted = extractParagraphTexts(para, paraPath);
+          results.push(...extracted);
         });
-        context.push(tNode);
-      } else if (tNode._) {
-        results.push({
-          text: tNode._,
-          tagPath: currentPath.join('/'),
-          context: context.slice(-2).join(' ')
-        });
-        context.push(tNode._);
       }
     });
+    return results; // Não continua recursão - já processou o text box
   }
 
-  // Recursão em todos os campos do objeto
+  // 🎯 PRIORITY 2: Se encontrou parágrafo NORMAL (sem text box acima), extrai textos
+  if (obj['w:p']) {
+    // Verifica se o parágrafo contém text boxes DENTRO dele
+    const paragraphs = Array.isArray(obj['w:p']) ? obj['w:p'] : [obj['w:p']];
+
+    for (let idx = 0; idx < paragraphs.length; idx++) {
+      const para = paragraphs[idx];
+      const paraPath = [...currentPath, `w:p[${idx}]`].join('/');
+
+      // Checa se tem text boxes dentro deste parágrafo
+      const hasTextBoxInside = JSON.stringify(para).includes('txbxContent') ||
+                                JSON.stringify(para).includes('v:textbox');
+
+      if (hasTextBoxInside) {
+        // Tem text box dentro - faz recursão para extraí-los separadamente
+        console.log('[EXTRACT] Paragraph contains text boxes, extracting them individually...');
+        results.push(...extractTextsRecursive(para, xmlPath, [...currentPath, `w:p[${idx}]`], context));
+      } else {
+        // Parágrafo normal - extrai todo o texto junto
+        const extracted = extractParagraphTexts(para, paraPath);
+        results.push(...extracted);
+      }
+    }
+    return results; // Não continua recursão - já processou os parágrafos
+  }
+
+  // 🎯 PRIORITY 3: Para outros containers, continua recursão
   for (const key in obj) {
+    if (key === 'w:p' || key === 'w:txbxContent') continue; // Já processados acima
+
     if (Array.isArray(obj[key])) {
       obj[key].forEach((item: any, index: number) => {
         results.push(
@@ -187,97 +320,124 @@ function validateTranslation(original: string, translation: string, isRetry: boo
     return { valid: false, reason: `Translation too long (${Math.round(ratio * 100)}% of original)` };
   }
 
-  // 3. Verifica número de sentenças (mais flexível em retry)
+  // 3. Verifica número de sentenças (REMOVIDO - muito restritivo)
+  // Comentário: A validação de contagem de sentenças foi removida porque:
+  // - Traduções naturais frequentemente alteram a estrutura das frases
+  // - Diferentes idiomas têm convenções diferentes de pontuação
+  // - Estava causando 80+ falsos positivos, mantendo texto sem traduzir
+  // - A validação de comprimento (ratio de caracteres) já é suficiente
+
+  // OPÇÃO ALTERNATIVA: Se quiser manter validação muito flexível, descomente abaixo:
+  /*
   const originalSentences = original.split(/[.!?]+/).filter(s => s.trim().length > 0).length;
   const translatedSentences = translation.split(/[.!?]+/).filter(s => s.trim().length > 0).length;
 
-  // Para textos muito curtos (1-2 sentenças), aceita maior variação
-  if (originalSentences <= 2) {
-    return { valid: true }; // Não valida contagem para textos muito curtos
+  // Validação MUITO flexível - só rejeita discrepâncias absurdas
+  if (originalSentences >= 5) { // Só valida textos com 5+ sentenças
+    const sentenceRatio = translatedSentences / Math.max(originalSentences, 1);
+    if (sentenceRatio < 0.3 || sentenceRatio > 3.0) { // Tolerância de 300%
+      return {
+        valid: false,
+        reason: `Extreme sentence count mismatch (original: ${originalSentences}, translated: ${translatedSentences})`
+      };
+    }
   }
-
-  const sentenceRatio = translatedSentences / Math.max(originalSentences, 1);
-  const minSentenceRatio = isRetry ? 0.5 : 0.7;
-  const maxSentenceRatio = isRetry ? 1.5 : 1.3;
-
-  if (sentenceRatio < minSentenceRatio || sentenceRatio > maxSentenceRatio) {
-    return {
-      valid: false,
-      reason: `Sentence count mismatch (original: ${originalSentences}, translated: ${translatedSentences})`
-    };
-  }
+  */
 
   return { valid: true };
 }
 
 /**
- * Agrupa textos curtos consecutivos para tradução em lote
+ * Agrupa textos para otimizar tradução (junta parágrafos até ~1500 chars)
+ * IMPORTANTE: NÃO agrupa text boxes - cada um deve ser traduzido separadamente
  */
-function groupShortTexts(texts: string[]): Array<{ indices: number[]; text: string; isGroup: boolean }> {
-  const MIN_LENGTH = 30; // Textos menores que 30 chars são agrupados
+function groupShortTexts(elements: TextElement[]): Array<{ indices: number[]; text: string; isGroup: boolean }> {
+  const TARGET_SIZE = 1500; // Tamanho ideal de cada grupo (caracteres)
+  const MAX_SIZE = 2000; // Tamanho máximo permitido
   const groups: Array<{ indices: number[]; text: string; isGroup: boolean }> = [];
 
-  let currentGroup: { indices: number[]; parts: string[] } | null = null;
+  let currentGroup: { indices: number[]; parts: string[]; totalChars: number } | null = null;
 
-  for (let i = 0; i < texts.length; i++) {
-    const text = texts[i];
-    const isShort = text.trim().length < MIN_LENGTH && text.trim().length > 3;
+  for (let i = 0; i < elements.length; i++) {
+    const elem = elements[i];
+    const text = elem.originalText;
+    const textLen = text.length;
 
-    if (isShort) {
-      // Inicia ou continua grupo
-      if (!currentGroup) {
-        currentGroup = { indices: [i], parts: [text] };
-      } else {
-        currentGroup.indices.push(i);
-        currentGroup.parts.push(text);
-      }
-    } else {
+    // 🚫 Text boxes NUNCA são agrupados (cada um traduz separado)
+    if (elem.isTextBox) {
       // Finaliza grupo anterior se existir
-      if (currentGroup) {
-        // Só cria grupo se tiver 2+ elementos
-        if (currentGroup.indices.length > 1) {
-          groups.push({
-            indices: currentGroup.indices,
-            text: currentGroup.parts.join(' ║ '), // Separador especial
-            isGroup: true
-          });
-        } else {
-          // Grupo de 1 elemento vira SINGLE
-          groups.push({
-            indices: currentGroup.indices,
-            text: currentGroup.parts[0],
-            isGroup: false
-          });
-        }
+      if (currentGroup && currentGroup.indices.length > 0) {
+        groups.push({
+          indices: currentGroup.indices,
+          text: currentGroup.parts.join('\n\n'),
+          isGroup: currentGroup.indices.length > 1
+        });
         currentGroup = null;
       }
 
-      // Adiciona texto normal
+      // Adiciona text box individualmente
       groups.push({
         indices: [i],
         text: text,
         isGroup: false
       });
+      console.log(`[GROUP] 📦 Text box kept separate: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
+      continue;
+    }
+
+    // Se o texto sozinho já é muito grande, envia individualmente
+    if (textLen > MAX_SIZE) {
+      // Finaliza grupo anterior se existir
+      if (currentGroup && currentGroup.indices.length > 0) {
+        groups.push({
+          indices: currentGroup.indices,
+          text: currentGroup.parts.join('\n\n'),
+          isGroup: currentGroup.indices.length > 1
+        });
+        currentGroup = null;
+      }
+
+      // Adiciona texto grande individualmente
+      groups.push({
+        indices: [i],
+        text: text,
+        isGroup: false
+      });
+      continue;
+    }
+
+    // Se não tem grupo, inicia um novo
+    if (!currentGroup) {
+      currentGroup = { indices: [i], parts: [text], totalChars: textLen };
+      continue;
+    }
+
+    // Verifica se cabe no grupo atual
+    if (currentGroup.totalChars + textLen <= TARGET_SIZE) {
+      // Cabe, adiciona
+      currentGroup.indices.push(i);
+      currentGroup.parts.push(text);
+      currentGroup.totalChars += textLen;
+    } else {
+      // Não cabe, finaliza grupo atual
+      groups.push({
+        indices: currentGroup.indices,
+        text: currentGroup.parts.join('\n\n'),
+        isGroup: currentGroup.indices.length > 1
+      });
+
+      // Inicia novo grupo com este texto
+      currentGroup = { indices: [i], parts: [text], totalChars: textLen };
     }
   }
 
   // Finaliza último grupo se existir
-  if (currentGroup) {
-    // Só cria grupo se tiver 2+ elementos
-    if (currentGroup.indices.length > 1) {
-      groups.push({
-        indices: currentGroup.indices,
-        text: currentGroup.parts.join(' ║ '),
-        isGroup: true
-      });
-    } else {
-      // Grupo de 1 elemento vira SINGLE
-      groups.push({
-        indices: currentGroup.indices,
-        text: currentGroup.parts[0],
-        isGroup: false
-      });
-    }
+  if (currentGroup && currentGroup.indices.length > 0) {
+    groups.push({
+      indices: currentGroup.indices,
+      text: currentGroup.parts.join('\n\n'),
+      isGroup: currentGroup.indices.length > 1
+    });
   }
 
   return groups;
@@ -287,17 +447,19 @@ function groupShortTexts(texts: string[]): Array<{ indices: number[]; text: stri
  * Traduz um batch de textos usando IA
  */
 async function translateBatch(
-  texts: string[],
+  elements: TextElement[],
   options: TranslationOptions,
   stats: { validationPassed: number; validationFailed: number; retriesSucceeded: number; originalKept: number }
 ): Promise<string[]> {
   const { targetLanguage, sourceLanguage, provider, model } = options;
 
-  // Agrupa textos curtos antes de traduzir
-  const groups = groupShortTexts(texts);
-  const translations: string[] = new Array(texts.length);
+  // Agrupa parágrafos para otimizar tradução (até ~1500 chars por grupo)
+  // IMPORTANTE: Text boxes NÃO são agrupados - cada um traduz separado
+  const groups = groupShortTexts(elements);
+  const translations: string[] = new Array(elements.length);
+  const texts = elements.map(e => e.originalText); // Para compatibilidade com código existente
 
-  console.log(`  📦 Grouped ${texts.length} texts into ${groups.length} translation units`);
+  console.log(`  📦 Grouped ${elements.length} paragraphs into ${groups.length} batches for translation`);
 
   // 🚀 PARALLEL TRANSLATION: Process 5 groups at a time
   const PARALLEL_LIMIT = 5;
@@ -357,19 +519,25 @@ async function translateBatch(
 
       // Se for grupo, separa de volta
       if (group.isGroup) {
-        // Tenta separar pelo separador correto
-        let parts = finalTranslation.split(' ║ ').map(p => p.trim());
+        // Separa pela quebra dupla de parágrafo
+        let parts = finalTranslation.split('\n\n').map(p => p.trim()).filter(p => p.length > 0);
 
-        // Se não encontrou o separador, tenta outros padrões
-        if (parts.length === 1) {
-          // Tenta sem espaços
-          parts = finalTranslation.split('║').map(p => p.trim());
+        // Se não funcionou, tenta outras variações
+        if (parts.length < group.indices.length) {
+          // Tenta com quebra simples
+          parts = finalTranslation.split('\n').map(p => p.trim()).filter(p => p.length > 0);
         }
 
-        // Se ainda não funcionou, usa split inteligente
+        // Se ainda não funcionou, tenta split por pontos (sentenças)
         if (parts.length < group.indices.length) {
-          console.warn(`[WARNING] Expected ${group.indices.length} parts but got ${parts.length}. Using fallback.`);
-          // Fallback: usa original para todos
+          console.warn(`[WARNING] Expected ${group.indices.length} parts but got ${parts.length}. Attempting sentence-based split...`);
+          // Split por pontuação forte
+          parts = finalTranslation.split(/(?<=[.!?])\s+/).map(p => p.trim()).filter(p => p.length > 0);
+        }
+
+        // Último fallback: usa original
+        if (parts.length < group.indices.length) {
+          console.warn(`[WARNING] All split strategies failed. Keeping original texts.`);
           for (const idx of group.indices) {
             translations[idx] = texts[idx];
           }
@@ -380,10 +548,26 @@ async function translateBatch(
             const idx = group.indices[j];
             let translatedPart = parts[j] || texts[idx];
 
-            // Se a parte traduzida não tem espaços mas deveria ter (>20 chars sem espaço)
-            if (translatedPart.length > 20 && !translatedPart.includes(' ')) {
-              // Tenta adicionar espaços em pontos naturais (letra minúscula seguida de maiúscula)
+            console.log(`[BATCH-DETAIL] Text #${idx}:\n  ORIGINAL: "${texts[idx]}"\n  TRANSLATED: "${translatedPart}"`);
+
+            // Se a parte traduzida não tem espaços mas deveria ter (>10 chars sem espaço)
+            if (translatedPart.length > 10 && !translatedPart.includes(' ')) {
+              console.warn(`[FIX] Detected merged words (${translatedPart.length} chars): "${translatedPart.substring(0, 50)}..."`);
+
+              // Estratégia 1: camelCase (minúscula seguida de maiúscula)
               translatedPart = translatedPart.replace(/([a-z])([A-Z])/g, '$1 $2');
+
+              // Estratégia 2: Maiúsculas seguidas de minúsculas (OCDE + está = "OCDEestá")
+              translatedPart = translatedPart.replace(/([A-Z]{2,})([a-z])/g, '$1 $2');
+
+              // Estratégia 3: Letras seguidas de palavras comuns (está, como, uma, para, etc)
+              const commonWords = ['está', 'como', 'uma', 'para', 'com', 'sem', 'por', 'que', 'mais', 'mas', 'tem', 'são', 'foi', 'ser'];
+              commonWords.forEach(word => {
+                const regex = new RegExp(`([a-záàâãéèêíìîóòôõúùûç])${word}`, 'gi');
+                translatedPart = translatedPart.replace(regex, `$1 ${word}`);
+              });
+
+              console.log(`[FIX] After fix: "${translatedPart.substring(0, 50)}..."`);
             }
 
             translations[idx] = translatedPart;
@@ -511,6 +695,7 @@ async function translateBatch(
         stats.validationPassed++;
         for (const idx of group.indices) {
           translations[idx] = finalTranslation;
+          console.log(`[BATCH-DETAIL] Text #${idx}:\n  ORIGINAL: "${texts[idx]}"\n  TRANSLATED: "${finalTranslation}"`);
         }
       }
 
@@ -561,30 +746,160 @@ async function translateBatch(
 }
 
 /**
- * Substitui textos no XML preservando estrutura
+ * Substitui textos no XML usando objeto parseado (funciona com texto fragmentado)
  */
 async function replaceTextsInXml(
   zip: JSZip,
   xmlPath: string,
-  replacements: Map<string, string>
+  elements: TextElement[]
 ): Promise<void> {
   const file = zip.file(xmlPath);
   if (!file) return;
 
-  let xmlContent = await file.async('string');
+  const xmlContent = await file.async('string');
+  const parsed = await parseStringPromise(xmlContent);
 
-  // Substitui textos usando regex para preservar tags XML
-  for (const [original, translated] of replacements.entries()) {
-    // Escapa caracteres especiais do regex
-    const escapedOriginal = original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let replacedCount = 0;
 
-    // Substitui dentro de tags <w:t>
-    const regex = new RegExp(`(<w:t[^>]*>)${escapedOriginal}(</w:t>)`, 'g');
-    xmlContent = xmlContent.replace(regex, `$1${translated}$2`);
+  // Substitui cada elemento usando tagPath
+  for (const elem of elements) {
+    if (!elem.translatedText || elem.translatedText === elem.originalText) continue;
+
+    console.log(`[REPLACE-DETAIL] Replacing in ${xmlPath}:\n  PATH: ${elem.tagPath}\n  FROM: "${elem.originalText}"\n  TO: "${elem.translatedText}"`);
+
+    // Se tem textNodes, é um texto fragmentado - substitui cada fragmento
+    if (elem.textNodes && elem.textNodes.length > 0) {
+      console.log(`[REPLACE-DETAIL] 📝 Text is fragmented into ${elem.textNodes.length} nodes, distributing translation...`);
+      console.log(`[REPLACE-DETAIL] Fragment paths:`, elem.textNodes.map(n => n.path));
+
+      // Estratégia simples: coloca todo o texto traduzido no primeiro <w:t> e limpa os outros
+      for (let i = 0; i < elem.textNodes.length; i++) {
+        const textNode = elem.textNodes[i];
+        const pathParts = textNode.path.split('/').filter(p => p.length > 0);
+        let current: any = parsed;
+
+        // Navega até o <w:t> específico
+        for (let j = 0; j < pathParts.length - 1; j++) {
+          const part = pathParts[j];
+          const match = part.match(/^(.+)\[(\d+)\]$/);
+          if (match) {
+            const key = match[1];
+            const index = parseInt(match[2]);
+            current = current?.[key]?.[index];
+          } else {
+            current = current?.[part];
+          }
+          if (!current) break;
+        }
+
+        if (current) {
+          const lastPart = pathParts[pathParts.length - 1];
+          const match = lastPart.match(/^(.+)\[(\d+)\]$/);
+          const tag = match ? match[1] : lastPart;
+          const idx = match ? parseInt(match[2]) : 0;
+
+          if (i === 0) {
+            // Primeiro fragmento: substitui com texto traduzido completo
+            console.log(`[REPLACE-DETAIL]   Fragment #${i}: Placing full translation here`);
+            if (Array.isArray(current[tag])) {
+              if (typeof current[tag][idx] === 'string') {
+                current[tag][idx] = elem.translatedText;
+              } else if (current[tag][idx]?._) {
+                current[tag][idx]._ = elem.translatedText;
+              }
+            } else {
+              if (typeof current[tag] === 'string') {
+                current[tag] = elem.translatedText;
+              } else if (current[tag]?._) {
+                current[tag]._ = elem.translatedText;
+              }
+            }
+            replacedCount++;
+          } else {
+            // Demais fragmentos: limpa (substitui com string vazia)
+            console.log(`[REPLACE-DETAIL]   Fragment #${i}: Clearing`);
+            if (Array.isArray(current[tag])) {
+              if (typeof current[tag][idx] === 'string') {
+                current[tag][idx] = '';
+              } else if (current[tag][idx]?._) {
+                current[tag][idx]._ = '';
+              }
+            } else {
+              if (typeof current[tag] === 'string') {
+                current[tag] = '';
+              } else if (current[tag]?._) {
+                current[tag]._ = '';
+              }
+            }
+          }
+        }
+      }
+
+      console.log(`[REPLACE-DETAIL] ✅ Successfully distributed translation across ${elem.textNodes.length} fragments`);
+    } else {
+      // Texto simples (não fragmentado), usa lógica original
+      const pathParts = elem.tagPath.split('/').filter(p => p.length > 0);
+      let current: any = parsed;
+
+      for (let i = 0; i < pathParts.length; i++) {
+        const part = pathParts[i];
+        const match = part.match(/^(.+)\[(\d+)\]$/);
+        if (match) {
+          const key = match[1];
+          const index = parseInt(match[2]);
+          if (current[key] && Array.isArray(current[key]) && current[key][index]) {
+            current = current[key][index];
+          } else {
+            break;
+          }
+        } else {
+          if (current[part]) {
+            current = current[part];
+          } else {
+            break;
+          }
+        }
+      }
+
+      // Substitui o texto nas tags <w:t> ou <a:t>
+      const textTags = ['w:t', 'a:t'];
+      let replaced = false;
+      for (const tag of textTags) {
+        if (current[tag]) {
+          const textArray = Array.isArray(current[tag]) ? current[tag] : [current[tag]];
+
+          textArray.forEach((tNode: any) => {
+            if (typeof tNode === 'string' && tNode === elem.originalText) {
+              current[tag] = elem.translatedText;
+              replacedCount++;
+              replaced = true;
+            } else if (tNode._ && tNode._ === elem.originalText) {
+              tNode._ = elem.translatedText;
+              replacedCount++;
+              replaced = true;
+            }
+          });
+        }
+      }
+
+      if (!replaced) {
+        console.warn(`[REPLACE-DETAIL] ⚠️ Failed to replace - text not found at path`);
+      } else {
+        console.log(`[REPLACE-DETAIL] ✅ Successfully replaced`);
+      }
+    }
   }
 
+  if (replacedCount > 0) {
+    console.log(`[REPLACE] ${xmlPath}: ${replacedCount} replacements made (via tagPath)`);
+  }
+
+  // Rebuild XML
+  const builder = new Builder();
+  const newXmlContent = builder.buildObject(parsed);
+
   // Atualiza o arquivo no ZIP
-  zip.file(xmlPath, xmlContent);
+  zip.file(xmlPath, newXmlContent);
 }
 
 /**
@@ -615,11 +930,23 @@ export async function translateDocx(
   try {
     // 1. Extrai textos
     log('\n[EXTRACT] 🔍 Extracting text from DOCX...');
-    const { zip, textElements } = await extractTextsFromDocx(inputPath);
+    let { zip, textElements } = await extractTextsFromDocx(inputPath);
     log(`[EXTRACT] ✓ Found ${textElements.length} text elements`);
 
     if (textElements.length === 0) {
       throw new Error('No text found in document');
+    }
+
+    // Limita elementos se maxPages foi especificado
+    if (options.maxPages && options.maxPages > 0) {
+      // Estimativa: ~80-120 elementos por página (dependendo do documento)
+      const estimatedElementsPerPage = 100;
+      const maxElements = options.maxPages * estimatedElementsPerPage;
+
+      if (textElements.length > maxElements) {
+        textElements = textElements.slice(0, maxElements);
+        log(`[LIMIT] 🚧 Limited to first ${options.maxPages} pages (~${maxElements} elements)`);
+      }
     }
 
     // 2. Agrupa por arquivo XML
@@ -649,12 +976,9 @@ export async function translateDocx(
     const batchTimes: number[] = [];
 
     for (const [xmlPath, elements] of elementsByXml.entries()) {
-      const replacements = new Map<string, string>();
-
       // Processa em batches
       for (let i = 0; i < elements.length; i += batchSize) {
         const batch = elements.slice(i, i + batchSize);
-        const texts = batch.map(e => e.originalText);
 
         // Progresso
         currentChunk++;
@@ -686,9 +1010,9 @@ export async function translateDocx(
         log(`\n[TRANSLATE] ⏳ Batch ${currentChunk}/${totalChunks} (${progress.percentage}%) - Section: ${progress.currentSection}`);
         log(`[TRANSLATE] 📝 Processing ${batch.length} text elements...`);
 
-        // Traduz batch
+        // Traduz batch (passa elementos completos para detectar text boxes)
         const startBatch = Date.now();
-        const translations = await translateBatch(texts, options, stats);
+        const translations = await translateBatch(batch, options, stats);
         const batchDuration = Date.now() - startBatch;
 
         // Registra tempo do batch para estimativa futura
@@ -697,15 +1021,14 @@ export async function translateDocx(
         log(`[TRANSLATE] ✓ Batch completed in ${(batchDuration / 1000).toFixed(1)}s`);
         log(`[TRANSLATE] 📊 Stats: ✓${stats.validationPassed} passed, ⟳${stats.retriesSucceeded} retried, ⚠${stats.originalKept} kept`);
 
-        // Mapeia traduções
+        // Mapeia traduções para elementos
         batch.forEach((elem, idx) => {
-          replacements.set(elem.originalText, translations[idx]);
           elem.translatedText = translations[idx];
         });
       }
 
-      // Substitui no XML
-      await replaceTextsInXml(zip, xmlPath, replacements);
+      // Substitui no XML usando elementos com tagPath
+      await replaceTextsInXml(zip, xmlPath, elements);
     }
 
     // 4. Gera novo DOCX

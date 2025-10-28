@@ -55,9 +55,11 @@ const MODELS_BY_PROVIDER: Record<string, string[]> = {
 export function TranslateDialog({ documentId, documentTitle }: TranslationDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [sourceLanguage, setSourceLanguage] = useState<string>('auto'); // NEW: Source language (default auto-detect)
   const [targetLanguage, setTargetLanguage] = useState<string>('');
   const [provider, setProvider] = useState<string>('');
   const [model, setModel] = useState<string>('');
+  const [maxPages, setMaxPages] = useState<string>(''); // NEW: Limit pages to translate
   const [isTranslating, setIsTranslating] = useState(false);
 
   const handleStartTranslation = async () => {
@@ -73,9 +75,11 @@ export function TranslateDialog({ documentId, documentTitle }: TranslationDialog
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          sourceLanguage: sourceLanguage && sourceLanguage !== 'auto' ? sourceLanguage : undefined, // Auto-detect if empty or "auto"
           targetLanguage,
           provider,
-          model
+          model,
+          maxPages: maxPages ? parseInt(maxPages) : undefined // Limit pages if specified
         })
       });
 
@@ -102,12 +106,12 @@ export function TranslateDialog({ documentId, documentTitle }: TranslationDialog
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
+        <Button variant="outline" size="sm" suppressHydrationWarning>
           <Languages className="w-4 h-4 mr-2" />
           Traduzir Documento
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md" suppressHydrationWarning>
         <DialogHeader>
           <DialogTitle>Traduzir Documento</DialogTitle>
           <DialogDescription>
@@ -116,6 +120,23 @@ export function TranslateDialog({ documentId, documentTitle }: TranslationDialog
         </DialogHeader>
 
         <div className="space-y-4 py-4">
+          <div className="space-y-2">
+            <Label htmlFor="source-language">Idioma de Origem</Label>
+            <Select value={sourceLanguage} onValueChange={setSourceLanguage} disabled={isTranslating}>
+              <SelectTrigger id="source-language">
+                <SelectValue placeholder="Auto-detectar" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">Auto-detectar</SelectItem>
+                {Object.entries(LANGUAGES).map(([code, name]) => (
+                  <SelectItem key={code} value={code}>
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
           <div className="space-y-2">
             <Label htmlFor="target-language">Idioma de Destino</Label>
             <Select value={targetLanguage} onValueChange={setTargetLanguage} disabled={isTranslating}>
@@ -130,6 +151,23 @@ export function TranslateDialog({ documentId, documentTitle }: TranslationDialog
                 ))}
               </SelectContent>
             </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="max-pages">Páginas para Traduzir (opcional)</Label>
+            <input
+              id="max-pages"
+              type="number"
+              min="1"
+              placeholder="Deixe vazio para traduzir tudo"
+              value={maxPages}
+              onChange={(e) => setMaxPages(e.target.value)}
+              disabled={isTranslating}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+            />
+            <p className="text-xs text-muted-foreground">
+              Limite a tradução às primeiras N páginas (útil para testes)
+            </p>
           </div>
 
           <div className="space-y-2">
