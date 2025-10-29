@@ -107,12 +107,21 @@ Retorne APENAS o JSON.`;
       }
 
       // Parse JSON response - remove markdown code blocks primeiro
+      console.log(`[NORMS] Batch ${Math.floor(i / batchSize) + 1}: Raw response length = ${response.length} chars`);
+
+      // Se resposta está vazia, pula
+      if (!response || response.trim().length === 0) {
+        console.warn(`[NORMS] Batch ${Math.floor(i / batchSize) + 1}: Empty response from AI, skipping`);
+        continue;
+      }
+
       let cleanedResponse = response.replace(/```json\s*/g, '').replace(/```\s*/g, '');
       const jsonMatch = cleanedResponse.match(/\{[\s\S]*\}/);
 
       if (!jsonMatch) {
-        console.warn('[NORMS] AI returned non-JSON response:', response.substring(0, 200));
-        console.warn('[NORMS] Full response:', response);
+        console.warn(`[NORMS] Batch ${Math.floor(i / batchSize) + 1}: No JSON found in response (length: ${response.length})`);
+        console.warn('[NORMS] First 300 chars:', response.substring(0, 300));
+        console.warn('[NORMS] Last 300 chars:', response.substring(Math.max(0, response.length - 300)));
         continue;
       }
 
@@ -120,13 +129,14 @@ Retorne APENAS o JSON.`;
       try {
         parsed = JSON.parse(jsonMatch[0]);
       } catch (parseError: any) {
-        console.error('[NORMS] JSON parse error:', parseError.message);
-        console.error('[NORMS] Attempted to parse:', jsonMatch[0].substring(0, 200));
+        console.error(`[NORMS] Batch ${Math.floor(i / batchSize) + 1}: JSON parse error - ${parseError.message}`);
+        console.error('[NORMS] JSON start:', jsonMatch[0].substring(0, 300));
+        console.error('[NORMS] JSON end:', jsonMatch[0].substring(Math.max(0, jsonMatch[0].length - 300)));
         continue;
       }
 
       const references = parsed.references || [];
-      console.log(`[NORMS] Found ${references.length} references in this batch`);
+      console.log(`[NORMS] Batch ${Math.floor(i / batchSize) + 1}: Found ${references.length} references`);
 
       // Processa e valida referências
       for (const ref of references) {
