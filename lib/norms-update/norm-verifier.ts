@@ -185,7 +185,7 @@ JSON:
         model: groundingModel,
         generationConfig: {
           temperature: 0.2,
-          maxOutputTokens: 1000,
+          maxOutputTokens: 2000,  // Aumentado para acomodar grounding + resposta JSON
         },
         tools: [{
           google_search: {}  // Sintaxe correta conforme documentação
