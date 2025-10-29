@@ -14,6 +14,7 @@ export async function detectNormsInDocument(
   // Processa em batches de 20 parágrafos
   const batchSize = 20;
   const allReferences: NormReference[] = [];
+  const errors: Array<{batch: number, type: string, details: string}> = [];
 
   console.log(`[NORMS] Analyzing ${paragraphs.length} paragraphs in ${Math.ceil(paragraphs.length / batchSize)} batches...`);
 
@@ -107,11 +108,15 @@ Retorne APENAS o JSON.`;
       }
 
       // Parse JSON response - remove markdown code blocks primeiro
-      console.log(`[NORMS] Batch ${Math.floor(i / batchSize) + 1}: Raw response length = ${response.length} chars`);
+      const batchNum = Math.floor(i / batchSize) + 1;
 
       // Se resposta está vazia, pula
       if (!response || response.trim().length === 0) {
-        console.warn(`[NORMS] Batch ${Math.floor(i / batchSize) + 1}: Empty response from AI, skipping`);
+        errors.push({
+          batch: batchNum,
+          type: 'EMPTY_RESPONSE',
+          details: 'AI returned empty response'
+        });
         continue;
       }
 
@@ -119,9 +124,11 @@ Retorne APENAS o JSON.`;
       const jsonMatch = cleanedResponse.match(/\{[\s\S]*\}/);
 
       if (!jsonMatch) {
-        console.warn(`[NORMS] Batch ${Math.floor(i / batchSize) + 1}: No JSON found in response (length: ${response.length})`);
-        console.warn('[NORMS] First 300 chars:', response.substring(0, 300));
-        console.warn('[NORMS] Last 300 chars:', response.substring(Math.max(0, response.length - 300)));
+        errors.push({
+          batch: batchNum,
+          type: 'NO_JSON',
+          details: `Response length: ${response.length} chars\nFirst 300: ${response.substring(0, 300)}\nLast 300: ${response.substring(Math.max(0, response.length - 300))}`
+        });
         continue;
       }
 
@@ -129,19 +136,24 @@ Retorne APENAS o JSON.`;
       try {
         parsed = JSON.parse(jsonMatch[0]);
       } catch (parseError: any) {
-        console.error(`[NORMS] Batch ${Math.floor(i / batchSize) + 1}: JSON parse error - ${parseError.message}`);
-        console.error('[NORMS] JSON start:', jsonMatch[0].substring(0, 300));
-        console.error('[NORMS] JSON end:', jsonMatch[0].substring(Math.max(0, jsonMatch[0].length - 300)));
+        errors.push({
+          batch: batchNum,
+          type: 'JSON_PARSE_ERROR',
+          details: `Error: ${parseError.message}\nJSON start: ${jsonMatch[0].substring(0, 300)}\nJSON end: ${jsonMatch[0].substring(Math.max(0, jsonMatch[0].length - 300))}`
+        });
         continue;
       }
 
       const references = parsed.references || [];
-      console.log(`[NORMS] Batch ${Math.floor(i / batchSize) + 1}: Found ${references.length} references`);
 
       // Processa e valida referências
       for (const ref of references) {
         if (!ref.type || !ref.number || !ref.fullText) {
-          console.warn('[NORMS] Skipping invalid reference:', ref);
+          errors.push({
+            batch: batchNum,
+            type: 'INVALID_REFERENCE',
+            details: `Missing required fields: ${JSON.stringify(ref)}`
+          });
           continue;
         }
 
@@ -149,7 +161,11 @@ Retorne APENAS o JSON.`;
         const absoluteIndex = ref.paragraphIndex || 0;
 
         if (absoluteIndex >= paragraphs.length) {
-          console.warn('[NORMS] Invalid paragraph index:', absoluteIndex);
+          errors.push({
+            batch: batchNum,
+            type: 'INVALID_INDEX',
+            details: `Paragraph index ${absoluteIndex} >= total paragraphs ${paragraphs.length}`
+          });
           continue;
         }
 
@@ -157,7 +173,11 @@ Retorne APENAS o JSON.`;
 
         // Verifica se o texto realmente existe no parágrafo
         if (!paragraph.text.includes(ref.fullText)) {
-          console.warn('[NORMS] Reference text not found in paragraph:', ref.fullText);
+          errors.push({
+            batch: batchNum,
+            type: 'TEXT_NOT_FOUND',
+            details: `Text "${ref.fullText}" not found in paragraph ${absoluteIndex}`
+          });
           continue;
         }
 
@@ -173,12 +193,45 @@ Retorne APENAS o JSON.`;
       }
 
     } catch (error: any) {
-      console.error('[NORMS] Error detecting norms in batch:', error.message);
-      // Continua com próximo batch mesmo em caso de erro
+      errors.push({
+        batch: Math.floor(i / batchSize) + 1,
+        type: 'EXCEPTION',
+        details: `${error.message}\n${error.stack || ''}`
+      });
     }
   }
 
-  console.log(`[NORMS] Detected ${allReferences.length} norm references`);
+  // Relatório consolidado no final
+  console.log('\n' + '='.repeat(80));
+  console.log('📊 NORM DETECTION REPORT');
+  console.log('='.repeat(80));
+  console.log(`✅ Successfully detected: ${allReferences.length} norm references`);
+  console.log(`⚠️  Errors encountered: ${errors.length}`);
+
+  if (errors.length > 0) {
+    console.log('\n' + '-'.repeat(80));
+    console.log('❌ ERROR DETAILS:');
+    console.log('-'.repeat(80));
+
+    // Agrupa erros por tipo
+    const errorsByType: Record<string, typeof errors> = {};
+    errors.forEach(err => {
+      if (!errorsByType[err.type]) errorsByType[err.type] = [];
+      errorsByType[err.type].push(err);
+    });
+
+    Object.entries(errorsByType).forEach(([type, errs]) => {
+      console.log(`\n📍 ${type} (${errs.length} occurrences):`);
+      errs.forEach(err => {
+        console.log(`  Batch ${err.batch}:`);
+        console.log(`  ${err.details.split('\n').join('\n  ')}`);
+        console.log('');
+      });
+    });
+  }
+
+  console.log('='.repeat(80) + '\n');
+
   return allReferences;
 }
 
