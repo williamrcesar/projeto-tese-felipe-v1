@@ -2,9 +2,28 @@
 
 Sistema de chat sobre documentos com múltiplas IAs (OpenAI, Gemini, Grok).
 
-## ⚠️ Aviso Importante
+## ⚠️ Avisos Importantes de Segurança
 
-Este é um **MVP local** para testes. Todos os dados são armazenados **apenas na memória** do servidor. Quando o servidor é reiniciado, **todos os documentos e configurações são perdidos**.
+### 🔓 Banco de Dados - Apenas para Testes (V1)
+
+**ATENÇÃO:** Este projeto está em **fase de validação da V1** e o banco de dados Supabase está configurado com **permissões totalmente abertas** para facilitar o desenvolvimento e testes.
+
+⚠️ **RISCOS:**
+- Qualquer usuário pode ler, inserir, modificar e deletar dados
+- Não há autenticação ou validação de usuários
+- Dados sensíveis podem ser expostos
+- Adequado **APENAS** para ambiente de desenvolvimento/testes
+
+🔒 **Antes de ir para produção:**
+- Implementar Row Level Security (RLS) no Supabase
+- Adicionar autenticação de usuários
+- Configurar políticas de acesso granulares
+- Validar todas as operações no backend
+- Criptografar dados sensíveis
+
+### 💾 Armazenamento Temporário
+
+Este é um **MVP** para testes. Alguns dados ainda podem ser armazenados **apenas na memória** do servidor. Quando o servidor é reiniciado, **esses dados podem ser perdidos**.
 
 As chaves de API **não são criptografadas** e ficam apenas na memória. Use apenas para testes locais.
 
