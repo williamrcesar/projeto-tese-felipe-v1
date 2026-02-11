@@ -229,6 +229,8 @@ export async function GET(
     return NextResponse.json({
       jobId: job.id,
       documentId: job.document_id,
+      status: job.status,
+      error_message: job.error_message,
       progress: {
         status: job.status,
         currentChunk: job.current_chunk,

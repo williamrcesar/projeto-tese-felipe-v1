@@ -349,16 +349,72 @@ export class PipelineEngine {
    */
   private async executeTranslate(context: PipelineExecutionContext): Promise<OperationResult> {
     // Call translate API internally
-    const { config, sourceDocumentPath } = context;
+    const { config, sourceDocumentPath, documentId } = context;
 
-    // TODO: Implement translate operation logic
+    const translateConfig = config as any;
+    const apiUrl = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3001';
+    const url = `${apiUrl}/api/translate/${documentId}`;
+
+    console.log(`[PIPELINE] Calling translate API: ${url}`);
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        targetLanguage: translateConfig.targetLanguage,
+        sourceLanguage: translateConfig.sourceLanguage,
+        provider: translateConfig.provider,
+        model: translateConfig.model,
+        maxPages: translateConfig.maxPages,
+        sourceDocumentPath
+      })
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.error(`[PIPELINE] Translate API error (${res.status}):`, errorText);
+      throw new Error(`Failed to start translate operation: ${res.status} ${errorText.substring(0, 200)}`);
+    }
+
+    const data = await res.json();
+    const translateJobId = data.jobId;
+    console.log(`[PIPELINE] Translate job created: ${translateJobId}`);
+
+    // Wait for translate job to complete (poll)
+    await this.waitForJobCompletion('translate', translateJobId);
+
+    // Get translation job details
+    const translationJob = await this.getTranslationJob(translateJobId);
+
+    if (!translationJob.output_path) {
+      throw new Error('Translation job completed without output_path');
+    }
+
+    // Download translated document from Storage to a temp path
+    const { data: fileBlob, error: downloadError } = await supabase.storage
+      .from('translations')
+      .download(translationJob.output_path);
+
+    if (downloadError || !fileBlob) {
+      console.error('[PIPELINE] Failed to download translated document:', downloadError);
+      throw new Error(`Failed to download translated document: ${downloadError?.message || 'Unknown error'}`);
+    }
+
+    const tempDir = os.tmpdir();
+    const tempPath = path.join(tempDir, `pipeline_${this.pipelineJobId}_translate_${Date.now()}.docx`);
+    const buffer = Buffer.from(await fileBlob.arrayBuffer());
+    await fs.writeFile(tempPath, buffer);
+
     return {
       operation: 'translate',
       operationIndex: context.currentOperationIndex,
       status: 'completed',
-      outputDocumentPath: sourceDocumentPath, // Placeholder
+      outputDocumentPath: tempPath,
+      operationJobId: translateJobId,
       metadata: {
-        items_processed: 0
+        items_processed: translationJob.total_chunks || 0,
+        progress_percentage: translationJob.progress_percentage || 0,
+        output_path: translationJob.output_path
       },
       completedAt: new Date().toISOString()
     };
@@ -654,6 +710,23 @@ export class PipelineEngine {
 
     if (error || !data) {
       throw new Error('Failed to get norms-update job');
+    }
+
+    return data;
+  }
+
+  /**
+   * Get translation job details
+   */
+  private async getTranslationJob(jobId: string): Promise<any> {
+    const { data, error } = await supabase
+      .from('translation_jobs')
+      .select('*')
+      .eq('id', jobId)
+      .single();
+
+    if (error || !data) {
+      throw new Error('Failed to get translation job');
     }
 
     return data;
